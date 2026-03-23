@@ -9,9 +9,10 @@ import (
 
 	gotgbot "github.com/PaulSonOfLars/gotgbot/v2"
 	"github.com/PaulSonOfLars/gotgbot/v2/ext"
-	"github.com/PaulSonOfLars/gotgbot/v2/ext/handlers"
+	tgHandlers "github.com/PaulSonOfLars/gotgbot/v2/ext/handlers"
 	messageFilters "github.com/PaulSonOfLars/gotgbot/v2/ext/handlers/filters/message"
 	"github.com/oybek/ho/internal/db"
+	appHandlers "github.com/oybek/ho/internal/handlers"
 )
 
 type Config struct {
@@ -48,6 +49,8 @@ func main() {
 	}
 	defer store.Close()
 
+	state := appHandlers.NewState()
+
 	bot, err := gotgbot.NewBot(cfg.TelegramBotToken, nil)
 	if err != nil {
 		log.Fatalf("failed to create bot: %v", err)
@@ -60,13 +63,9 @@ func main() {
 		},
 	})
 
-	dispatcher.AddHandler(handlers.NewMessage(messageFilters.Text, func(b *gotgbot.Bot, ctx *ext.Context) error {
-		if ctx.EffectiveMessage == nil || ctx.EffectiveMessage.Text == "" {
-			return nil
-		}
-		_, err := ctx.EffectiveMessage.Reply(b, ctx.EffectiveMessage.Text, nil)
-		return err
-	}))
+	dispatcher.AddHandler(tgHandlers.NewMessage(messageFilters.Location, appHandlers.HandleLocation(state)))
+	dispatcher.AddHandler(tgHandlers.NewMessage(messageFilters.Photo, appHandlers.HandlePhoto(state)))
+	dispatcher.AddHandler(tgHandlers.NewMessage(messageFilters.Text, appHandlers.HandleText(state, store)))
 
 	updater := ext.NewUpdater(dispatcher, nil)
 
