@@ -11,6 +11,7 @@ import (
 	tgHandlers "github.com/PaulSonOfLars/gotgbot/v2/ext/handlers"
 	"github.com/oybek/ho/internal/db"
 	"github.com/oybek/ho/internal/model"
+	"github.com/oybek/ho/internal/text"
 )
 
 type State struct {
@@ -96,7 +97,7 @@ func HandleLocation(state *State) tgHandlers.Response {
 		state.m[user.Id] = draft
 		state.mu.Unlock()
 
-		botMsg, err := replyWithKeyboard(b, msg, "Got your location. Please send one or more photos of this place.")
+		botMsg, err := replyWithKeyboard(b, msg, text.LocationReceivedPrompt)
 		addMsgID(draft, botMsg)
 		return err
 	}
@@ -117,7 +118,7 @@ func HandlePhoto(state *State) tgHandlers.Response {
 		draft := state.m[user.Id]
 		if draft == nil || draft.Step != stepNeedPhotos {
 			state.mu.Unlock()
-			_, err := replyWithKeyboard(b, msg, "Please share your location first.")
+			_, err := replyWithKeyboard(b, msg, text.ShareLocationPrompt)
 			return err
 		}
 		addMsgID(draft, msg)
@@ -130,7 +131,7 @@ func HandlePhoto(state *State) tgHandlers.Response {
 		draft.Step = stepNeedNote
 		state.mu.Unlock()
 
-		botMsg, err := replyWithKeyboard(b, msg, "Thanks! Now tell me how you feel here, right now.")
+		botMsg, err := replyWithKeyboard(b, msg, text.PhotoReceivedPrompt)
 		addMsgID(draft, botMsg)
 		return err
 	}
@@ -148,7 +149,7 @@ func HandleText(state *State, store *db.Store) tgHandlers.Response {
 		}
 
 		if msg.Text == "/start" {
-			_, err := replyWithKeyboard(b, msg, "Share your location to start.")
+			_, err := replyWithKeyboard(b, msg, text.ShareLocationPrompt)
 			return err
 		}
 
@@ -156,19 +157,19 @@ func HandleText(state *State, store *db.Store) tgHandlers.Response {
 		draft := state.m[user.Id]
 		if draft == nil {
 			state.mu.Unlock()
-			_, err := replyWithKeyboard(b, msg, "Share your location to start.")
+			_, err := replyWithKeyboard(b, msg, text.ShareLocationPrompt)
 			return err
 		}
 
 		switch draft.Step {
 		case stepNeedPhotos:
 			state.mu.Unlock()
-			_, err := replyWithKeyboard(b, msg, "Please send one or more photos of this place.")
+			_, err := replyWithKeyboard(b, msg, text.NeedPhotosPrompt)
 			return err
 		case stepNeedNote:
 			if len(draft.HereOnce.PhotoIDs) == 0 {
 				state.mu.Unlock()
-				_, err := replyWithKeyboard(b, msg, "Please send one or more photos of this place.")
+				_, err := replyWithKeyboard(b, msg, text.NeedPhotosPrompt)
 				return err
 			}
 			addMsgID(draft, msg)
@@ -182,7 +183,7 @@ func HandleText(state *State, store *db.Store) tgHandlers.Response {
 
 			if _, err := store.InsertHereOnce(context.Background(), &toInsert); err != nil {
 				log.Printf("failed to insert here_once: %v", err)
-				_, replyErr := replyWithKeyboard(b, msg, "Sorry, I couldn't save that. Please try again.")
+				_, replyErr := replyWithKeyboard(b, msg, text.SaveFailedPrompt)
 				if replyErr != nil {
 					log.Printf("failed to send error reply: %v", replyErr)
 				}
@@ -197,14 +198,14 @@ func HandleText(state *State, store *db.Store) tgHandlers.Response {
 					}
 				}
 			}(chatID, msgIDs)
-			botMsg, err := sendWithKeyboard(b, chatID, "Saved! Share another location any time.")
+			botMsg, err := sendWithKeyboard(b, chatID, text.SaveSuccessPrompt)
 			if err == nil {
 				_ = botMsg
 			}
 			return err
 		default:
 			state.mu.Unlock()
-			_, err := replyWithKeyboard(b, msg, "Share your location to start.")
+			_, err := replyWithKeyboard(b, msg, text.ShareLocationPrompt)
 			return err
 		}
 		return nil
