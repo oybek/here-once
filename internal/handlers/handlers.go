@@ -33,6 +33,8 @@ const (
 type userDraft struct {
 	HereOnce model.HereOnce
 	Step     step
+	ChatID   int64
+	MsgIDs   []int64
 }
 
 func locationKeyboard() *gotgbot.ReplyKeyboardMarkup {
@@ -40,7 +42,7 @@ func locationKeyboard() *gotgbot.ReplyKeyboardMarkup {
 		Keyboard: [][]gotgbot.KeyboardButton{
 			{
 				{
-					Text:            "Share location",
+					Text:            "Capture the moment",
 					RequestLocation: true,
 				},
 			},
@@ -49,11 +51,24 @@ func locationKeyboard() *gotgbot.ReplyKeyboardMarkup {
 	}
 }
 
-func replyWithKeyboard(b *gotgbot.Bot, msg *gotgbot.Message, text string) error {
-	_, err := msg.Reply(b, text, &gotgbot.SendMessageOpts{
+func replyWithKeyboard(b *gotgbot.Bot, msg *gotgbot.Message, text string) (*gotgbot.Message, error) {
+	resp, err := msg.Reply(b, text, &gotgbot.SendMessageOpts{
 		ReplyMarkup: locationKeyboard(),
 	})
-	return err
+	return resp, err
+}
+
+func sendWithKeyboard(b *gotgbot.Bot, chatID int64, text string) (*gotgbot.Message, error) {
+	return b.SendMessage(chatID, text, &gotgbot.SendMessageOpts{
+		ReplyMarkup: locationKeyboard(),
+	})
+}
+
+func addMsgID(draft *userDraft, msg *gotgbot.Message) {
+	if draft == nil || msg == nil {
+		return
+	}
+	draft.MsgIDs = append(draft.MsgIDs, int64(msg.MessageId))
 }
 
 func HandleLocation(state *State) tgHandlers.Response {
@@ -72,14 +87,18 @@ func HandleLocation(state *State) tgHandlers.Response {
 				Lat: msg.Location.Latitude,
 				Lon: msg.Location.Longitude,
 			},
-			Step: stepNeedPhotos,
+			Step:   stepNeedPhotos,
+			ChatID: msg.Chat.Id,
 		}
+		addMsgID(draft, msg)
 
 		state.mu.Lock()
 		state.m[user.Id] = draft
 		state.mu.Unlock()
 
-		return replyWithKeyboard(b, msg, "Got your location. Please send one or more photos of this place.")
+		botMsg, err := replyWithKeyboard(b, msg, "Got your location. Please send one or more photos of this place.")
+		addMsgID(draft, botMsg)
+		return err
 	}
 }
 
@@ -98,8 +117,10 @@ func HandlePhoto(state *State) tgHandlers.Response {
 		draft := state.m[user.Id]
 		if draft == nil || draft.Step != stepNeedPhotos {
 			state.mu.Unlock()
-			return replyWithKeyboard(b, msg, "Please share your location first.")
+			_, err := replyWithKeyboard(b, msg, "Please share your location first.")
+			return err
 		}
+		addMsgID(draft, msg)
 
 		photoIDs := make([]string, 0, len(msg.Photo))
 		for _, p := range msg.Photo {
@@ -109,7 +130,9 @@ func HandlePhoto(state *State) tgHandlers.Response {
 		draft.Step = stepNeedNote
 		state.mu.Unlock()
 
-		return replyWithKeyboard(b, msg, "Thanks! Now tell me how you feel here, right now.")
+		botMsg, err := replyWithKeyboard(b, msg, "Thanks! Now tell me how you feel here, right now.")
+		addMsgID(draft, botMsg)
+		return err
 	}
 }
 
@@ -125,49 +148,65 @@ func HandleText(state *State, store *db.Store) tgHandlers.Response {
 		}
 
 		if msg.Text == "/start" {
-			return replyWithKeyboard(b, msg, "Share your location to start.")
+			_, err := replyWithKeyboard(b, msg, "Share your location to start.")
+			return err
 		}
-
-		var (
-			toInsert model.HereOnce
-			doInsert bool
-		)
 
 		state.mu.Lock()
 		draft := state.m[user.Id]
 		if draft == nil {
 			state.mu.Unlock()
-			return replyWithKeyboard(b, msg, "Share your location to start.")
+			_, err := replyWithKeyboard(b, msg, "Share your location to start.")
+			return err
 		}
 
 		switch draft.Step {
 		case stepNeedPhotos:
 			state.mu.Unlock()
-			return replyWithKeyboard(b, msg, "Please send one or more photos of this place.")
+			_, err := replyWithKeyboard(b, msg, "Please send one or more photos of this place.")
+			return err
 		case stepNeedNote:
 			if len(draft.HereOnce.PhotoIDs) == 0 {
 				state.mu.Unlock()
-				return replyWithKeyboard(b, msg, "Please send one or more photos of this place.")
+				_, err := replyWithKeyboard(b, msg, "Please send one or more photos of this place.")
+				return err
 			}
+			addMsgID(draft, msg)
 			draft.HereOnce.Note = msg.Text
 			draft.HereOnce.Created = time.Now().UTC()
-			toInsert = draft.HereOnce
-			doInsert = true
+			toInsert := draft.HereOnce
+			chatID := draft.ChatID
+			msgIDs := append([]int64(nil), draft.MsgIDs...)
 			delete(state.m, user.Id)
 			state.mu.Unlock()
-		default:
-			state.mu.Unlock()
-			return replyWithKeyboard(b, msg, "Share your location to start.")
-		}
 
-		if doInsert {
 			if _, err := store.InsertHereOnce(context.Background(), &toInsert); err != nil {
 				log.Printf("failed to insert here_once: %v", err)
-				return replyWithKeyboard(b, msg, "Sorry, I couldn't save that. Please try again.")
+				_, replyErr := replyWithKeyboard(b, msg, "Sorry, I couldn't save that. Please try again.")
+				if replyErr != nil {
+					log.Printf("failed to send error reply: %v", replyErr)
+				}
+				return err
 			}
-			return replyWithKeyboard(b, msg, "Saved! Share another location any time.")
+			go func(chatID int64, ids []int64) {
+				time.Sleep(2 * time.Second)
+				for _, id := range ids {
+					_, err := b.DeleteMessage(chatID, id, nil)
+					if err != nil {
+						log.Printf("failed to delete message %d: %v", id, err)
+					}
+				}
+			}(chatID, msgIDs)
+			botMsg, err := sendWithKeyboard(b, chatID, "Saved! Share another location any time.")
+			if err == nil {
+				_ = botMsg
+			}
+			return err
+		default:
+			state.mu.Unlock()
+			_, err := replyWithKeyboard(b, msg, "Share your location to start.")
+			return err
 		}
-
 		return nil
 	}
 }
