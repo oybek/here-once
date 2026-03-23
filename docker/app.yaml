@@ -11,3 +11,14 @@ services:
       interval: 10s
       timeout: 3s
       retries: 3
+  db:
+    image: postgres:16
+    env_file: .env
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres-init.sql:/docker-entrypoint-initdb.d/001-init.sql:ro
+
+volumes:
+  postgres_data:

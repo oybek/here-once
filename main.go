@@ -11,22 +11,28 @@ import (
 	"github.com/PaulSonOfLars/gotgbot/v2/ext"
 	"github.com/PaulSonOfLars/gotgbot/v2/ext/handlers"
 	messageFilters "github.com/PaulSonOfLars/gotgbot/v2/ext/handlers/filters/message"
+	"github.com/oybek/ho/internal/db"
 )
 
 type Config struct {
 	TelegramBotToken string
+	DatabaseURL      string
 }
 
 func loadConfig() *Config {
 	return &Config{
-		TelegramBotToken: os.Getenv("TELEGRAM_BOT_TOKEN"),
+		TelegramBotToken: os.Getenv("TG_BOT_TOKEN"),
+		DatabaseURL:      os.Getenv("DATABASE_URL"),
 	}
 }
 
 func main() {
 	cfg := loadConfig()
 	if cfg.TelegramBotToken == "" {
-		log.Fatal("TELEGRAM_BOT_TOKEN is required")
+		log.Fatal("TG_BOT_TOKEN is required")
+	}
+	if cfg.DatabaseURL == "" {
+		log.Fatal("DATABASE_URL is required")
 	}
 
 	ctx, stop := signal.NotifyContext(
@@ -35,6 +41,12 @@ func main() {
 		syscall.SIGTERM,
 	)
 	defer stop()
+
+	store, err := db.New(ctx, cfg.DatabaseURL)
+	if err != nil {
+		log.Fatalf("failed to connect to database: %v", err)
+	}
+	defer store.Close()
 
 	bot, err := gotgbot.NewBot(cfg.TelegramBotToken, nil)
 	if err != nil {
