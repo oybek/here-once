@@ -4,6 +4,7 @@ import "time"
 
 type HereOnce struct {
 	ID       int64
+	UserID   int64
 	Lat      float64
 	Lon      float64
 	Note     string
